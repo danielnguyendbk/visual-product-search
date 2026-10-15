@@ -23,3 +23,6 @@ indexes/*
 !indexes/.gitkeep
 benchmark_results/*
 !benchmark_results/.gitkeep
+!benchmark_results/nprobe_benchmark.csv
+!benchmark_results/scalability_benchmark.csv
+!benchmark_results/benchmark_metadata.json

@@ -4,7 +4,7 @@ from backend.schemas.benchmark import BenchmarkRequest, BenchmarkResponse
 from backend.schemas.catalog import CatalogCreate, CatalogRecord, CatalogUpdate
 from backend.schemas.common import ErrorCode, ErrorDetail, ErrorResponse, HealthResponse
 from backend.schemas.compare import CompareConfig, CompareEngineResult, CompareResponse
-from backend.schemas.search import SearchEngine, SearchResponse, SearchResult
+from backend.schemas.search import ProductSearchResult, SearchEngine, SearchResponse, SearchResult
 
 __all__ = [
     "BenchmarkRequest",
@@ -19,6 +19,7 @@ __all__ = [
     "ErrorDetail",
     "ErrorResponse",
     "HealthResponse",
+    "ProductSearchResult",
     "SearchEngine",
     "SearchResponse",
     "SearchResult",
