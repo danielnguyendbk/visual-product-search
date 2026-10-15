@@ -1,11 +1,11 @@
-"""Comparison endpoint contract."""
+"""Encode once and delegate comparison to the existing core service."""
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, Request, UploadFile
 
-from backend.api.search import validate_image, validate_search_parameters
-from backend.core.errors import APIError
-from backend.schemas.common import ErrorCode, ErrorResponse
+from backend.api.search import handle_search_error, validate_image, validate_search_parameters
+from backend.schemas.common import ErrorResponse
 from backend.schemas.compare import CompareResponse
+from backend.services.api_service import get_services
 
 router = APIRouter(tags=["compare"])
 
@@ -15,20 +15,24 @@ router = APIRouter(tags=["compare"])
     response_model=CompareResponse,
     responses={
         400: {"model": ErrorResponse},
-        422: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
     },
 )
-async def compare_engines(
-    image: UploadFile = File(...),
+def compare_engines(
+    request: Request,
+    file: UploadFile = File(...),
     k: int = Form(5),
-    nprobe: int = Form(4),
+    nprobe: int = Form(8),
 ) -> CompareResponse:
-    validate_image(image)
-    validate_search_parameters(k, nprobe)
-
-    raise APIError(
-        status.HTTP_503_SERVICE_UNAVAILABLE,
-        ErrorCode.SEARCH_ENGINE_NOT_READY,
-        "Search engines are not ready for comparison.",
-    )
+    with validate_image(file) as image:
+        services = get_services(request)
+        validate_search_parameters(services, k, nprobe)
+        with services.lock:
+            embedding, encoding_ms = services.encode(image)
+            try:
+                result = services.compare.compare(embedding, k=k, nprobe=nprobe)
+            except RuntimeError as exc:
+                handle_search_error(exc)
+    for engine in ("sequential", "faiss"):
+        result[engine]["results"] = services.enrich(result[engine]["results"])
+    return CompareResponse(query={"encoding_ms": encoding_ms}, **result)

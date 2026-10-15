@@ -1,0 +1,32 @@
+{
+  "seed": 42,
+  "query_count": 100,
+  "k": 5,
+  "warmup_queries": 10,
+  "query_selection": "NumPy default_rng(42), without replacement, separately for each prefix subset",
+  "self_exclusion": "Retrieve K+1; remove query image_id; keep first K; missing ANN results are misses",
+  "sequential_baseline": "Recorded exact Top-K and Sequential latencies reused per N for the scalability-only rerun; Experiment A preserved.",
+  "sequential_timing": "embeddings @ query plus stable full argsort for K+1",
+  "faiss_timing": "index.search for one query and K+1, excluding nprobe setting and postprocessing",
+  "build_timing": "Temporary index creation, training and add; no artifact I/O. total_seconds covers only the latest Experiment B rerun.",
+  "experiment_a_index": "Existing IVF64 index; not rebuilt",
+  "subset_nlist": "min(round(sqrt(N)), max(8, N // 40))",
+  "subset_nprobe": "max(1, round(nlist / 8))",
+  "training_seed": 42,
+  "metric": "inner_product",
+  "dimension": 2048,
+  "python_version": "3.13.6",
+  "numpy_version": "2.3.2",
+  "faiss_version": "1.15.1",
+  "faiss_omp_threads": 16,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+  "artifact_sha256": {
+    "data/processed/catalog.csv": "ff2ba7a8c60d6fc3ffa33255b26107fea0642992f1f00783b077915283bc3aed",
+    "data/processed/embeddings.npy": "ae68b0ef19d3227f0d16ffa4daea7ce80ebbfe0f10203a7af91935eee46afc3b",
+    "data/processed/image_ids.npy": "1bee13bf6c4c51bedba5b8cec1bdec80df5c0d6a7127f9d54b212d8cbef1535e",
+    "indexes/faiss_ivf.index": "75049ccd44337b02b5fe2a8e3b801e1059c55b7260879759f741624ff7d9d751"
+  },
+  "total_seconds": 0.4895537000011245,
+  "warnings": []
+}

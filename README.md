@@ -1,15 +1,13 @@
 # Visual Product Search
 
-Milestone 0 provides the project skeleton, REST API contract, temporary in-memory catalog, and Streamlit mock flow for a future visual product search system.
-
-No encoder, embeddings, dataset, Sequential Search implementation, FAISS index, or benchmark measurement exists in this milestone. Search, comparison, benchmark, and index rebuild requests therefore return an explicit HTTP `503` error instead of generated data.
+Visual Product Search compares exact Sequential Search with FAISS `IndexIVFFlat` using the same L2-normalized ResNet50 embeddings. FastAPI reuses the existing encoder and core search services, and serves saved benchmark aggregates.
 
 ## Stack
 
 - Backend: FastAPI
 - Frontend: Streamlit
 - Language: Python
-- Future search engines: Sequential Search and FAISS `IndexIVFFlat`
+- Search engines: Sequential Search and FAISS `IndexIVFFlat`
 
 ## Project structure
 
@@ -34,7 +32,7 @@ visual-product-search/
 └── README.md
 ```
 
-The catalog service stores records only in process memory. Data is lost whenever the backend restarts. It is a temporary implementation for API contract tests, not a production database.
+Search metadata comes from `data/processed/catalog.csv`, loaded once with the model, embeddings, ID mapping and FAISS index at startup. The legacy `/api/v1/catalog` CRUD service remains a separate temporary in-memory contract; it does not change the search catalog.
 
 ## Setup
 
@@ -60,7 +58,16 @@ Swagger UI:
 http://127.0.0.1:8000/docs
 ```
 
-All application routes use the `/api/v1` base path.
+Search, Compare, Benchmark and Health use `/api`; the same handlers are also available under `/api/v1`. Swagger UI documents the multipart fields and response schemas.
+
+Local search requires these prebuilt artifacts:
+
+- `data/processed/catalog.csv`
+- `data/processed/embeddings.npy`
+- `data/processed/image_ids.npy`
+- `indexes/faiss_ivf.index`
+
+ResNet50 uses the existing encoder's torchvision weights cache (or downloads weights on first use). The API does not build embeddings, train indexes or run benchmarks.
 
 ## Run the frontend
 
@@ -70,16 +77,28 @@ Keep the backend running, then start Streamlit from another terminal:
 streamlit run frontend/app.py
 ```
 
-The frontend uses `http://127.0.0.1:8000/api/v1` by default. Set `BACKEND_BASE_URL` to override it.
+The frontend is the existing mock flow and has not yet been integrated with these API responses. It uses `http://127.0.0.1:8000/api/v1` by default; set `BACKEND_BASE_URL` to override it.
 
-## API readiness behavior
+## API
 
-- `GET /api/v1/health` reports model, embeddings, and index readiness as `false`.
-- `POST /api/v1/search` returns `SEARCH_ENGINE_NOT_READY` with HTTP `503` after validating the request.
-- `POST /api/v1/compare` returns HTTP `503` while shared search resources are unavailable.
-- `POST /api/v1/benchmark` returns `BENCHMARK_NOT_READY` with HTTP `503`.
+- `GET /api/health` reports readiness, catalog size and embedding dimension. Startup failures leave health available with `status: "degraded"`.
+- `POST /api/search`: multipart `file` (JPG/JPEG/PNG), `engine` (`sequential` or `faiss`, default `sequential`), `k` (default 5), `nprobe` (default 8). Sequential ignores `nprobe` and returns it as `null`.
+- `POST /api/compare`: multipart `file`, `k` (default 5), `nprobe` (default 8). Encodes once, calls the existing CompareService, and enriches both result sets with catalog metadata. Recall@K measures ANN agreement with exact Top-K, not semantic accuracy.
+- `GET /api/benchmark` reads `nprobe_benchmark.csv`, `scalability_benchmark.csv` and `benchmark_metadata.json` from `benchmark_results/`. Missing files return `503`; the endpoint never reruns experiments.
 - `POST /api/v1/index/rebuild` returns `INDEX_NOT_READY` with HTTP `503`.
-- Catalog CRUD is available through the temporary in-memory service.
+- Legacy catalog CRUD remains at `/api/v1/catalog`.
+
+Search returns `encoding_ms` separately from `search_latency_ms`. Search latency is taken directly from the core engine timer and excludes encoding, artifact loading and metadata lookup. Compare preserves the core's per-engine latency and metrics. Requests share a lock to protect mutable FAISS settings and core latency fields; these timings are request observations, while the saved experiments remain the official benchmark.
+
+Invalid images, engines, K or FAISS nprobe return `400`. Search/Compare return `503` when shared resources are unavailable. Uploaded images are decoded to RGB in memory and are not saved permanently.
+
+Example from PowerShell (replace the image path with an existing local image):
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/search -F "file=@data/raw/fashion-product-images-small/images/31893.jpg" -F "engine=faiss" -F "k=5" -F "nprobe=8"
+curl.exe -X POST http://127.0.0.1:8000/api/compare -F "file=@data/raw/fashion-product-images-small/images/31893.jpg" -F "k=5" -F "nprobe=8"
+curl.exe http://127.0.0.1:8000/api/benchmark
+```
 
 All API errors use this envelope:
 
@@ -87,7 +106,7 @@ All API errors use this envelope:
 {
   "error": {
     "code": "SEARCH_ENGINE_NOT_READY",
-    "message": "Search engine is not ready."
+    "message": "Search resources are unavailable. Check the model, catalog and artifacts."
   }
 }
 ```
@@ -95,10 +114,11 @@ All API errors use this envelope:
 ## Tests
 
 ```powershell
-python -m pytest
+python -m pytest -q tests/test_api_contract.py tests/test_health.py
+python -m pytest -q
 ```
 
-The contract suite covers health, OpenAPI discovery, image and parameter validation, unavailable search and benchmark resources, and catalog CRUD.
+API tests use lightweight encoder/search doubles with the real integration layer and CompareService, so they need no model download or local dataset. They cover metadata, shared-resource reuse, one-time query encoding, core timings, input validation, readiness, read-only benchmark loading and legacy catalog CRUD. `pytest.ini` collects `tests/`; scripts under `scripts/test_*.py` remain manual checks.
 
 ## Planned ownership
 
@@ -106,4 +126,4 @@ The contract suite covers health, OpenAPI discovery, image and parameter validat
 - Member 2: Sequential Search, FAISS, Search/Compare engine
 - Member 3: Benchmark, Integration, Tests
 
-The service signatures in `backend/services/` are reserved for these later milestones and should not be changed without a team decision.
+The existing core services remain the source of encoding, search and comparison logic.

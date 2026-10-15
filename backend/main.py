@@ -1,5 +1,8 @@
 """FastAPI application entrypoint."""
 
+from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -9,8 +12,22 @@ from backend.api import benchmark, catalog, compare, health, index, search
 from backend.core.config import settings
 from backend.core.errors import APIError
 from backend.schemas.common import ErrorCode
+from backend.services.api_service import APIServices
 
-app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.services = None
+    try:
+        app.state.services = APIServices()
+    except Exception:
+        # Health and saved benchmarks remain available if local artifacts are absent.
+        logging.getLogger(__name__).exception("Search resources could not be initialized.")
+    yield
+    app.state.services = None
+
+
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 
 
 def error_response(status_code: int, code: ErrorCode, message: str) -> JSONResponse:
@@ -31,21 +48,27 @@ async def handle_validation_error(
 ) -> JSONResponse:
     invalid_fields = {str(error["loc"][-1]) for error in exc.errors()}
 
-    if "image" in invalid_fields:
+    if "file" in invalid_fields or "image" in invalid_fields:
         return error_response(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status.HTTP_400_BAD_REQUEST,
             ErrorCode.INVALID_IMAGE,
             "A JPG or PNG image is required.",
         )
+    if "engine" in invalid_fields:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            ErrorCode.INVALID_ENGINE,
+            "engine must be 'sequential' or 'faiss'.",
+        )
     if "k" in invalid_fields:
         return error_response(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status.HTTP_400_BAD_REQUEST,
             ErrorCode.INVALID_K,
             "k must be a positive integer.",
         )
     if "nprobe" in invalid_fields:
         return error_response(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status.HTTP_400_BAD_REQUEST,
             ErrorCode.INVALID_NPROBE,
             "nprobe must be a positive integer.",
         )
@@ -73,6 +96,9 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
         "An internal error occurred.",
     )
 
+
+for api_router in (health.router, search.router, compare.router, benchmark.router):
+    app.include_router(api_router, prefix=settings.api_prefix)
 
 for api_router in (
     health.router,

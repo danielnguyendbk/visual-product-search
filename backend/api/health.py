@@ -1,19 +1,22 @@
 """Health endpoint."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from backend.schemas.common import HealthResponse
-from backend.services.catalog_service import catalog_service
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
-def get_health() -> HealthResponse:
+def get_health(request: Request) -> HealthResponse:
+    services = getattr(request.app.state, "services", None)
+    ready = services is not None
     return HealthResponse(
-        status="ok",
-        model_ready=False,
-        embeddings_ready=False,
-        index_ready=False,
-        catalog_size=catalog_service.count(),
+        status="ok" if ready else "degraded",
+        model_ready=ready,
+        embeddings_ready=ready,
+        index_ready=ready,
+        catalog_size=len(services.catalog) if ready else 0,
+        embedding_dimension=services.compare.dimension if ready else None,
+        faiss_ready=ready,
     )
