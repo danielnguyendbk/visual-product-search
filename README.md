@@ -49,7 +49,7 @@ python -m pip install -r requirements.txt
 From the project root:
 
 ```powershell
-python -m uvicorn backend.main:app --reload
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 Swagger UI:
@@ -71,13 +71,17 @@ ResNet50 uses the existing encoder's torchvision weights cache (or downloads wei
 
 ## Run the frontend
 
-Keep the backend running, then start Streamlit from another terminal:
+Keep FastAPI running in terminal 1, then start Streamlit from terminal 2 at the project root:
 
 ```powershell
 streamlit run frontend/app.py
 ```
 
-The frontend is the existing mock flow and has not yet been integrated with these API responses. It uses `http://127.0.0.1:8000/api/v1` by default; set `BACKEND_BASE_URL` to override it.
+Open `http://localhost:8501`. Home displays backend readiness. Search and Compare accept JPG/JPEG/PNG queries and call FastAPI only when their action button is clicked. Changing a control hides the previous results. Product images are read from repository-relative paths; missing images show a short message.
+
+Benchmark displays the saved tables and charts from `GET /api/benchmark`; it never starts an experiment. Search-only latency excludes ResNet50 encoding, and Compare Recall@K measures FAISS agreement with exact Sequential Top-K.
+
+The frontend defaults to `http://127.0.0.1:8000`. To use another backend, set `$env:BACKEND_URL = "http://127.0.0.1:8000"` before starting Streamlit (use the server URL without `/api`).
 
 ## API
 
@@ -119,6 +123,8 @@ python -m pytest -q
 ```
 
 API tests use lightweight encoder/search doubles with the real integration layer and CompareService, so they need no model download or local dataset. They cover metadata, shared-resource reuse, one-time query encoding, core timings, input validation, readiness, read-only benchmark loading and legacy catalog CRUD. `pytest.ini` collects `tests/`; scripts under `scripts/test_*.py` remain manual checks.
+
+Frontend unit tests cover the HTTP upload contract, backend failures and safe local image resolution. They do not require a running backend.
 
 ## Planned ownership
 
