@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class ErrorCode(str, Enum):
     INVALID_IMAGE = "INVALID_IMAGE"
+    INVALID_ENGINE = "INVALID_ENGINE"
     INVALID_K = "INVALID_K"
     INVALID_NPROBE = "INVALID_NPROBE"
     CATALOG_NOT_FOUND = "CATALOG_NOT_FOUND"
@@ -33,3 +34,5 @@ class HealthResponse(BaseModel):
     embeddings_ready: bool
     index_ready: bool
     catalog_size: int
+    embedding_dimension: int | None
+    faiss_ready: bool

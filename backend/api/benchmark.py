@@ -1,25 +1,21 @@
-"""Benchmark endpoint contract."""
+"""Read-only access to saved benchmark aggregates."""
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter
 
-from backend.core.errors import APIError
-from backend.schemas.benchmark import BenchmarkRequest, BenchmarkResponse
-from backend.schemas.common import ErrorCode, ErrorResponse
+from backend.schemas.benchmark import BenchmarkResponse
+from backend.schemas.common import ErrorResponse
+from backend.services.api_service import read_benchmark_results
 
 router = APIRouter(tags=["benchmark"])
 
 
-@router.post(
+@router.get(
     "/benchmark",
     response_model=BenchmarkResponse,
     responses={
-        422: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
     },
 )
-def run_benchmark(payload: BenchmarkRequest) -> BenchmarkResponse:
-    raise APIError(
-        status.HTTP_503_SERVICE_UNAVAILABLE,
-        ErrorCode.BENCHMARK_NOT_READY,
-        "Benchmark resources are not ready.",
-    )
+def get_benchmark() -> BenchmarkResponse:
+    return BenchmarkResponse(**read_benchmark_results())

@@ -10,16 +10,26 @@ class SearchEngine(str, Enum):
     FAISS = "faiss"
 
 
-class SearchResult(BaseModel):
+class ProductSearchResult(BaseModel):
     rank: int
-    image_id: str
-    product_id: str
+    image_id: int | str
+    product_id: int | str
     image_path: str
     score: float
+    master_category: str
+    sub_category: str
+    article_type: str
+    base_colour: str
+    product_display_name: str
+
+
+SearchResult = ProductSearchResult
 
 
 class SearchResponse(BaseModel):
     engine: SearchEngine
     k: int
-    latency_ms: float | None
-    results: list[SearchResult]
+    nprobe: int | None
+    encoding_ms: float
+    search_latency_ms: float
+    results: list[ProductSearchResult]

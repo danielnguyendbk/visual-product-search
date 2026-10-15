@@ -12,14 +12,6 @@ class BenchmarkRequest(BaseModel):
 
 
 class BenchmarkResponse(BaseModel):
-    dataset_size: int
-    nlist: int | None
-    nprobe: int
-    k: int
-    sequential_p50_ms: float | None
-    sequential_p95_ms: float | None
-    faiss_p50_ms: float | None
-    faiss_p95_ms: float | None
-    recall_at_k: float | None
-    speedup: float | None
-    index_build_ms: float | None
+    nprobe_benchmark: list[dict]
+    scalability_benchmark: list[dict]
+    metadata: dict

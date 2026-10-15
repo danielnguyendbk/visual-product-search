@@ -1,77 +1,95 @@
-"""Search endpoint contract for the not-yet-implemented engines."""
+"""Image search using shared encoder and existing search services."""
 
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from backend.core.errors import APIError
 from backend.schemas.common import ErrorCode, ErrorResponse
 from backend.schemas.search import SearchEngine, SearchResponse
+from backend.services.api_service import APIServices, get_services
 
 router = APIRouter(tags=["search"])
-
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png"}
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 
-def validate_image(image: UploadFile) -> None:
-    content_type = (image.content_type or "").lower()
-    suffix = Path(image.filename or "").suffix.lower()
+def validate_image(file: UploadFile) -> Image.Image:
+    content_type = (file.content_type or "").lower()
+    suffix = Path(file.filename or "").suffix.lower()
     if content_type not in ALLOWED_IMAGE_CONTENT_TYPES or suffix not in ALLOWED_IMAGE_SUFFIXES:
-        raise APIError(
-            status.HTTP_400_BAD_REQUEST,
-            ErrorCode.INVALID_IMAGE,
-            "Image must be a JPG or PNG file.",
-        )
-
+        raise APIError(400, ErrorCode.INVALID_IMAGE, "Image must be a JPG or PNG file.")
+    data = file.file.read()
+    if not data:
+        raise APIError(400, ErrorCode.INVALID_IMAGE, "Uploaded image must not be empty.")
     try:
-        Image.open(image.file).verify()
-        image.file.seek(0)
-    except (OSError, UnidentifiedImageError, ValueError):
-        image.file.seek(0)
+        with Image.open(BytesIO(data)) as image:
+            if image.format not in {"JPEG", "PNG"}:
+                raise ValueError("Unsupported image format.")
+            image.verify()
+        with Image.open(BytesIO(data)) as image:
+            # Conversion decodes the pixels and detaches them from the upload stream.
+            return image.convert("RGB")
+    except (OSError, UnidentifiedImageError, ValueError, SyntaxError, Image.DecompressionBombError):
         raise APIError(
-            status.HTTP_400_BAD_REQUEST,
-            ErrorCode.INVALID_IMAGE,
-            "Uploaded file is not a valid JPG or PNG image.",
+            400, ErrorCode.INVALID_IMAGE, "Uploaded file is not a readable JPG or PNG image.",
         ) from None
 
 
-def validate_search_parameters(k: int, nprobe: int | None = None) -> None:
-    if k <= 0:
+def validate_search_parameters(
+    services: APIServices, k: int, nprobe: int | None = None,
+) -> None:
+    if not 1 <= k <= services.compare.dataset_size:
         raise APIError(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            ErrorCode.INVALID_K,
-            "k must be greater than zero.",
+            400, ErrorCode.INVALID_K,
+            f"k must be between 1 and {services.compare.dataset_size}.",
         )
-    if nprobe is not None and nprobe <= 0:
+    if nprobe is not None and not 1 <= nprobe <= services.faiss.index.nlist:
         raise APIError(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            ErrorCode.INVALID_NPROBE,
-            "nprobe must be greater than zero.",
+            400, ErrorCode.INVALID_NPROBE,
+            f"nprobe must be between 1 and {services.faiss.index.nlist}.",
         )
+
+
+def handle_search_error(exc: RuntimeError) -> None:
+    # An IVF search can have fewer than K candidates with a small nprobe.
+    if str(exc).startswith("FAISS found only "):
+        raise APIError(
+            400, ErrorCode.INVALID_NPROBE,
+            "FAISS found fewer than k candidates; increase nprobe or reduce k.",
+        ) from exc
+    raise exc
 
 
 @router.post(
-    "/search",
-    response_model=SearchResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        422: {"model": ErrorResponse},
-        503: {"model": ErrorResponse},
-    },
+    "/search", response_model=SearchResponse,
+    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
 )
-async def search_products(
-    image: UploadFile = File(...),
+def search_products(
+    request: Request,
+    file: UploadFile = File(...),
     engine: SearchEngine = Form(SearchEngine.SEQUENTIAL),
     k: int = Form(5),
-    nprobe: int | None = Form(None),
+    nprobe: int = Form(8),
 ) -> SearchResponse:
-    validate_image(image)
-    validate_search_parameters(k, nprobe)
-
-    raise APIError(
-        status.HTTP_503_SERVICE_UNAVAILABLE,
-        ErrorCode.SEARCH_ENGINE_NOT_READY,
-        "Search engine is not ready.",
+    with validate_image(file) as image:
+        services = get_services(request)
+        validate_search_parameters(services, k, nprobe if engine == SearchEngine.FAISS else None)
+        with services.lock:
+            embedding, encoding_ms = services.encode(image)
+            service = services.faiss if engine == SearchEngine.FAISS else services.sequential
+            try:
+                results = (
+                    service.search(embedding, k=k, nprobe=nprobe)
+                    if engine == SearchEngine.FAISS else service.search(embedding, k=k)
+                )
+            except RuntimeError as exc:
+                handle_search_error(exc)
+            latency_ms = service.last_search_latency_ms
+    return SearchResponse(
+        engine=engine, k=k, nprobe=nprobe if engine == SearchEngine.FAISS else None,
+        encoding_ms=encoding_ms, search_latency_ms=latency_ms,
+        results=services.enrich(results),
     )
