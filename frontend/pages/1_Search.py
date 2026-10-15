@@ -1,74 +1,47 @@
-"""Search page for the Streamlit skeleton."""
+"""Upload a query and search through FastAPI."""
 
-import os
-
-import pandas as pd
-import requests
 import streamlit as st
 
-API_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000/api/v1")
+import api_client
+from ui import number, preview_query, show_results
 
-
-def show_api_error(response: requests.Response) -> None:
-    try:
-        error = response.json().get("error", {})
-    except requests.JSONDecodeError:
-        error = {}
-
-    message = error.get("message", "The backend request failed.")
-    code = error.get("code", "UNKNOWN_ERROR")
-    if response.status_code == 503:
-        st.warning("Resource not ready")
-        st.caption(f"{message} Code: {code}")
-    else:
-        st.error(message)
-        st.caption(f"Code: {code}")
-
-
-st.set_page_config(page_title="Search · Visual Product Search", layout="wide")
+st.set_page_config(page_title="Search · Visual Product Search", page_icon="🔎", layout="wide")
 st.title("Search")
-st.caption("Upload a JPG or PNG image and send it to the FastAPI search contract.")
+st.caption("Tra cứu sản phẩm bằng một ảnh query.")
 
 uploaded_image = st.file_uploader("Query image", type=["jpg", "jpeg", "png"])
-engine = st.selectbox("Search engine", options=["sequential", "faiss"])
-k = st.number_input("Top-K", min_value=1, value=5, step=1)
-nprobe = None
+valid_image = preview_query(uploaded_image)
+controls = st.columns(3)
+with controls[0]:
+    engine = st.selectbox(
+        "Engine", ["sequential", "faiss"],
+        format_func=lambda value: "Sequential" if value == "sequential" else "FAISS IVF",
+    )
+with controls[1]:
+    k = st.number_input("Top-K", min_value=1, max_value=10, value=5, step=1)
+nprobe = 8
 if engine == "faiss":
-    nprobe = st.number_input("nprobe", min_value=1, value=4, step=1)
+    with controls[2]:
+        nprobe = st.number_input("nprobe", min_value=1, max_value=64, value=8, step=1)
 
-if st.button("Search", type="primary"):
-    if uploaded_image is None:
-        st.warning("Choose a JPG or PNG image before searching.")
+st.caption("Chỉ gửi query khi bấm Search. Đổi ảnh hoặc cấu hình sẽ ẩn kết quả cũ.")
+if st.button("Search", type="primary", disabled=not valid_image):
+    try:
+        with st.spinner("Đang encode và tìm kiếm..."):
+            payload = api_client.search_image(
+                uploaded_image.name, uploaded_image.getvalue(), uploaded_image.type,
+                engine=engine, k=int(k), nprobe=int(nprobe),
+            )
+    except api_client.BackendError as exc:
+        st.error(str(exc))
     else:
-        form_data = {"engine": engine, "k": int(k)}
-        if nprobe is not None:
-            form_data["nprobe"] = int(nprobe)
-
-        files = {
-            "image": (
-                uploaded_image.name,
-                uploaded_image.getvalue(),
-                uploaded_image.type,
-            )
-        }
-        try:
-            response = requests.post(
-                f"{API_BASE_URL}/search",
-                data=form_data,
-                files=files,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            st.error(f"Could not reach the backend: {exc}")
-        else:
-            if response.ok:
-                payload = response.json()
-                st.subheader("Results")
-                st.write(f"Engine: {payload['engine']} · Top-K: {payload['k']}")
-                results = payload.get("results", [])
-                if results:
-                    st.dataframe(pd.DataFrame(results), use_container_width=True)
-                else:
-                    st.info("No search results were returned.")
-            else:
-                show_api_error(response)
+        st.subheader("Kết quả")
+        metrics = st.columns(5 if payload["engine"] == "faiss" else 4)
+        metrics[0].metric("Engine", "FAISS IVF" if payload["engine"] == "faiss" else "Sequential")
+        metrics[1].metric("Encoding time (ms)", number(payload["encoding_ms"]))
+        metrics[2].metric("Search-only latency (ms)", number(payload["search_latency_ms"]))
+        metrics[3].metric("K", payload["k"])
+        if payload["engine"] == "faiss":
+            metrics[4].metric("nprobe", payload["nprobe"])
+        st.caption("Search latency không bao gồm thời gian ResNet50 encoding.")
+        show_results(payload["results"], columns=3)

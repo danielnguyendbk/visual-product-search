@@ -1,82 +1,57 @@
-"""Comparison page for the Streamlit skeleton."""
+"""Compare both engines with one uploaded query through FastAPI."""
 
-import os
-
-import pandas as pd
-import requests
 import streamlit as st
 
-API_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000/api/v1")
+import api_client
+from ui import number, preview_query, show_results
 
-
-def show_api_error(response: requests.Response) -> None:
-    try:
-        error = response.json().get("error", {})
-    except requests.JSONDecodeError:
-        error = {}
-
-    message = error.get("message", "The backend request failed.")
-    code = error.get("code", "UNKNOWN_ERROR")
-    if response.status_code == 503:
-        st.warning("Resource not ready")
-        st.caption(f"{message} Code: {code}")
-    else:
-        st.error(message)
-        st.caption(f"Code: {code}")
-
-
-def metric_value(value: float | None) -> str:
-    return "N/A" if value is None else f"{value:.4f}"
-
-
-st.set_page_config(page_title="Compare · Visual Product Search", layout="wide")
+st.set_page_config(page_title="Compare · Visual Product Search", page_icon="🔎", layout="wide")
 st.title("Compare")
-st.caption("The two engines will share one query and the same retrieval configuration.")
+st.caption("Hai engine dùng cùng một query; backend chỉ encode ảnh một lần.")
 
 uploaded_image = st.file_uploader("Query image", type=["jpg", "jpeg", "png"])
-k = st.number_input("Top-K", min_value=1, value=5, step=1)
-nprobe = st.number_input("nprobe", min_value=1, value=4, step=1)
+valid_image = preview_query(uploaded_image)
+k_column, nprobe_column = st.columns(2)
+with k_column:
+    k = st.number_input("Top-K", min_value=1, max_value=10, value=5, step=1)
+with nprobe_column:
+    nprobe = st.number_input("nprobe", min_value=1, max_value=64, value=8, step=1)
 
-if st.button("Run Comparison", type="primary"):
-    if uploaded_image is None:
-        st.warning("Choose a JPG or PNG image before running the comparison.")
+st.caption("Đổi ảnh hoặc cấu hình sẽ ẩn kết quả cũ. Bấm Run Comparison để lấy kết quả mới.")
+if st.button("Run Comparison", type="primary", disabled=not valid_image):
+    try:
+        with st.spinner("Đang encode và so sánh hai engine..."):
+            payload = api_client.compare_image(
+                uploaded_image.name, uploaded_image.getvalue(), uploaded_image.type,
+                k=int(k), nprobe=int(nprobe),
+            )
+    except api_client.BackendError as exc:
+        st.error(str(exc))
     else:
-        files = {
-            "image": (
-                uploaded_image.name,
-                uploaded_image.getvalue(),
-                uploaded_image.type,
-            )
-        }
-        try:
-            response = requests.post(
-                f"{API_BASE_URL}/compare",
-                data={"k": int(k), "nprobe": int(nprobe)},
-                files=files,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            st.error(f"Could not reach the backend: {exc}")
-        else:
-            if response.ok:
-                payload = response.json()
-                sequential_column, faiss_column = st.columns(2)
-                with sequential_column:
-                    st.subheader("Sequential")
-                    st.dataframe(
-                        pd.DataFrame(payload["sequential"]["results"]),
-                        use_container_width=True,
-                    )
-                with faiss_column:
-                    st.subheader("FAISS")
-                    st.dataframe(
-                        pd.DataFrame(payload["faiss"]["results"]),
-                        use_container_width=True,
-                    )
-
-                overlap, recall, speedup = st.columns(3)
-                overlap.metric("Overlap@K", metric_value(payload.get("overlap_at_k")))
-                recall.metric("Recall@K", metric_value(payload.get("recall_at_k")))
-                speedup.metric("Speedup", metric_value(payload.get("speedup")))
-            else:
-                show_api_error(response)
+        config, metrics = payload["config"], payload["metrics"]
+        latency_columns = st.columns(5)
+        latency_columns[0].metric("Sequential latency (ms)", number(payload["sequential"]["latency_ms"]))
+        latency_columns[1].metric("FAISS latency (ms)", number(payload["faiss"]["latency_ms"]))
+        latency_columns[2].metric("Recall@K", number(metrics["recall_at_k"]))
+        latency_columns[3].metric("Overlap", f"{metrics['overlap_count']}/{config['k']}")
+        speedup = f"{number(metrics['speedup'])}×" if metrics["speedup"] is not None else "N/A"
+        latency_columns[4].metric("Speedup", speedup)
+        config_columns = st.columns(4)
+        for column, key, label in zip(
+            config_columns, ["dataset_size", "k", "nlist", "nprobe"], ["N", "K", "nlist", "nprobe"],
+        ):
+            column.metric(label, config[key])
+        st.caption(
+            f"Encoding một lần: {number(payload['query']['encoding_ms'])} ms. "
+            "Latency của hai engine chỉ đo search, không bao gồm encoding."
+        )
+        st.info(
+            "Recall@K ở đây là độ trùng của FAISS với exact Sequential Top-K, "
+            "không phải độ chính xác phân loại hoặc semantic accuracy."
+        )
+        for column, engine, title in zip(
+            st.columns(2), ["sequential", "faiss"], ["Sequential Search", "FAISS IVF"],
+        ):
+            with column:
+                st.subheader(title)
+                show_results(payload[engine]["results"])
